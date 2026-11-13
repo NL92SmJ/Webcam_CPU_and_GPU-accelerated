@@ -3,7 +3,7 @@
 ## 1. Motivation & Problem Statement
 Modern computer vision applications, real-time video streaming, and edge AI workloads frequently hit severe hardware bottlenecks when scaling beyond standard definitions. Consumer-grade webcams are frequently limited by native resolution constraints, heavy compression artifacts (such as MJPEG encapsulation over USB 2.0 limitations), and extreme CPU overhead during raw frame acquisition, colour-space conversion, and pipeline orchestration.
 
-This project explores the performance, latency characteristics, and hardware footprint of scaling a live video streaming pipeline from a naive CPU-bound baseline to a hardware-accelerated deep learning architecture using an Efficient Sub-Pixel Convolutional Network (ESPCN) with residual connections. Operating on a constrained consumer system—an **NVIDIA RTX 3050 (6 GB VRAM)** paired with an **Intel Core i3-12100F**—this benchmark investigates how hardware constraints, USB I/O bounds, memory transfers, and neural network inference impact real-time frame rates, thermal stability, and frame-pacing consistency.
+This project explores the performance, latency characteristics, and hardware footprint of scaling a live video streaming pipeline from a naive CPU-bound baseline to a hardware-accelerated deep learning architecture using an Efficient Sub-Pixel Convolutional Network (ESPCN) with residual connections, as well as an industrial zero-copy preprocessing pipeline. Operating on a constrained consumer system—an **NVIDIA RTX 3050 (6 GB VRAM)** paired with an **Intel Core i3-12100F**—this benchmark investigates how hardware constraints, USB I/O bounds, memory transfers, and neural network inference impact real-time frame rates, thermal stability, and frame-pacing consistency.
 
 ---
 
@@ -17,7 +17,7 @@ This project explores the performance, latency characteristics, and hardware foo
 ---
 
 ## 3. Deep-Dive Insight: The USB I/O Bottleneck & The "Capture Wall"
-During extended 5-minute stress tests comparing the CPU-baseline against the GPU-accelerated pipeline, a fascinating systems-level phenomenon emerged: **Both pipelines locked in at an almost identical average framerate of ~30.68 to 30.70 FPS.**
+During extended stress tests comparing the CPU-baseline against GPU-accelerated pipelines, a fascinating systems-level phenomenon emerged: **Both pipelines locked in at an almost identical average framerate of ~30.68 to 30.72 FPS.**
 
 ### Why It Happens: The Capture Wall
 In a real-time computer vision pipeline, throughput can never exceed the acquisition rate of the input device. Because the webcam was constrained by USB 2.0 architecture (`480M`), the UVC driver forced an MJPEG compression stream that capped raw frame delivery at 30 FPS. 
@@ -25,7 +25,9 @@ In a real-time computer vision pipeline, throughput can never exceed the acquisi
 
 ---
 
-## 4. Comprehensive 5-Minute Benchmark Results
+## 4. Comprehensive Benchmark Results
+
+### A. AI-Upscaling & 5-Minute Stress Test
 The following empirical data was captured over continuous 300-second execution runs using precise CUDA events and NVML live hardware telemetry:
 
 | Metrik | CPU-Baseline (OpenCV Resize) | GPU-Accelerated (ESPCN + PyTorch) |
@@ -39,26 +41,23 @@ The following empirical data was captured over continuous 300-second execution r
 
 <img width="3600" height="2400" alt="webcam_benchmark_comparison" src="https://github.com/user-attachments/assets/fca624d6-3488-4999-a596-ebedaaf0722a" />
 
+### B. Industrial Preprocessing & Zero-Copy Comparison (CPU vs. GPU Zero-Copy)
+To evaluate the impact of eliminating CPU-side staging buffers and PCIe transport overhead, an automated 10-minute stress test compared standard CPU-baseline preprocessing against a GPU-accelerated zero-copy pipeline:
+
+| Metric | CPU-Baseline (OpenCV + PCIe H2D) | GPU-Accelerated (Zero-Copy Pipeline) | Delta / Improvement |
+| :--- | :--- | :--- | :--- |
+| **Average Framerate** | 30.72 FPS | 30.68 FPS | Bound by USB 2.0 capture wall |
+| **FPS Jitter (StdDev)** | 4.88 FPS | 4.94 FPS | Comparable temporal stability |
+| **1% Lows (Stutter Metric)** | 23.82 FPS | 24.70 FPS | +3.7% improved tail-latency stability |
+| **Ø Preprocessing Time** | 0.35 ms | 0.31 ms | Optimized tensor execution |
+| **Ø PCIe H2D Transfer Time** | **2.65 ms** | **0.00 ms** | **100% elimination of bus overhead** |
+| **Ø End-to-End Latency** | **3.16 ms** | **1.02 ms** | **~67.7% latency reduction** |
+| **Ø Power Consumption (GPU)**| 18.96 W | 19.31 W | Highly stable thermal envelope |
+| **Max GPU Temperature** | 39.0 °C | 40.0 °C | Nominal thermal delta (+1.0 °C) |
 
 ---
 
 ## 5. Real-World Implications & Systems-Level Learnings
 
 1. **The Power Consumption Trade-off (FPS per Watt):**
-   While the GPU-accelerated pipeline delivered visually superior upscaled frames, it did so at a significant energy cost—increasing active GPU power draw from ~6.7W (IDLE) up to **28.83W** and raising core temperatures to 49°C. In constrained edge-AI environments, burning ~29W for a pipeline capped by a 30 FPS USB camera highlights the necessity of matching model complexity directly to hardware utility.
-   
-2. **Latency vs. Compute Complexity:**
-   The CPU baseline achieved an almost negligible latency (~0.20 ms) because it relied on trivial bilinear interpolation (`cv2.resize`). Shifting the workload to the GPU introduced a measurable inference and transfer overhead (**13.31 ms**). However, because 13.31 ms sits safely below the strict 33.3 ms temporal boundary required for 30 FPS, the pipeline maintained real-time viability without dropping frames.
-
-3. **The Danger of Misleading Benchmarks:**
-   Looking purely at average FPS would suggest that "CPU and GPU perform identically." Only by incorporating telemetry (NVML power draw, temperature scaling, and latency breakdowns) does the true architectural difference become transparent.
-
----
-
-## 6. Future Work & Advanced Optimization Roadmap
-To bypass current I/O limitations and extract maximum enterprise-grade performance, future iterations will focus on:
-- **TensorRT / ONNX Runtime Export:** Compiling the PyTorch model to TensorRT to strip away Python interpreter overhead and push inference latency deep into single-digit milliseconds.
-- **Zero-Copy Memory Interop:** Eliminating CPU-side NumPy/OpenCV staging buffers entirely via direct CUDA-OpenGL/Vulkan interop.
-- **High-Speed Synthetic Streams:** Removing the physical webcam constraint to benchmark absolute peak throughput and saturation limits of the RTX 3050.
-
----
+   While deep learning upscaling delivered visually superior frames, it increased active GPU power draw up to **28.83W** (raising core temperatures to 49°C). In constrained edge-AI environments, matching model complexity directly to hardware utility is critical.
